@@ -1,0 +1,10 @@
+
+.streamlit/secrets.toml
+__pycache__/
+.pytest_cache/
+.venv/
+.env
+*.mp4
+*.mov
+*.webm
+*.m4v
