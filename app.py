@@ -1,842 +1,483 @@
-
-"""AI Video Quality Inspector - Streamlit Cloud Edition."""
-
-import csv
-import io
-import json
-import shutil
-import tempfile
-import uuid
-import zipfile
-
-from concurrent.futures import (
-    ThreadPoolExecutor,
-    as_completed
-)
-from pathlib import Path
-
 import streamlit as st
 
-from engine import (
-    ROOT,
-    analyze_file,
-    checksum_and_save
-)
-
-
 st.set_page_config(
-    page_title="AI Video Quality Inspector",
-    page_icon="🎬",
-    layout="wide"
+    page_title="Cyber Tech Login",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
+# -------------------------------
+# Session state
+# -------------------------------
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if "username" not in st.session_state:
+    st.session_state.username = ""
+
+# -------------------------------
+# Custom CSS
+# -------------------------------
 st.markdown("""
 <style>
-.block-container {
-    padding-top: 1.4rem;
+/* ===== Hide Streamlit default ===== */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+[data-testid="stSidebar"] {display: none;}
+
+/* ===== Main app background ===== */
+.stApp {
+    background:
+        radial-gradient(circle at 20% 20%, rgba(0,255,255,0.14), transparent 25%),
+        radial-gradient(circle at 80% 30%, rgba(138,43,226,0.18), transparent 28%),
+        radial-gradient(circle at 50% 80%, rgba(0,128,255,0.14), transparent 25%),
+        linear-gradient(135deg, #050816 0%, #081125 35%, #0a0f1f 65%, #040712 100%);
+    color: white;
+    overflow: hidden;
 }
-[data-testid="stMetricValue"] {
-    font-weight: 750;
+
+/* ===== Animated background layer ===== */
+.cyber-bg {
+    position: fixed;
+    inset: 0;
+    z-index: -10;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+/* moving glow blobs */
+.cyber-bg::before,
+.cyber-bg::after {
+    content: "";
+    position: absolute;
+    width: 45vw;
+    height: 45vw;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.22;
+    animation: floatGlow 12s ease-in-out infinite alternate;
+}
+
+.cyber-bg::before {
+    top: -10%;
+    left: -10%;
+    background: #00e5ff;
+}
+
+.cyber-bg::after {
+    bottom: -15%;
+    right: -10%;
+    background: #8a2be2;
+    animation-duration: 15s;
+}
+
+@keyframes floatGlow {
+    0%   {transform: translate(0, 0) scale(1);}
+    50%  {transform: translate(60px, 30px) scale(1.1);}
+    100% {transform: translate(-40px, -20px) scale(0.95);}
+}
+
+/* grid overlay */
+.grid-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: -9;
+    background-image:
+        linear-gradient(rgba(0,255,255,0.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,255,0.08) 1px, transparent 1px);
+    background-size: 38px 38px;
+    mask-image: linear-gradient(to bottom, rgba(255,255,255,0.9), rgba(255,255,255,0.15));
+    animation: moveGrid 16s linear infinite;
+    pointer-events: none;
+}
+
+@keyframes moveGrid {
+    from {transform: translateY(0px);}
+    to   {transform: translateY(38px);}
+}
+
+/* scan line */
+.scanline {
+    position: fixed;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, rgba(0,255,255,0.9), transparent);
+    box-shadow: 0 0 20px rgba(0,255,255,0.85);
+    z-index: -8;
+    animation: scan 6s linear infinite;
+    pointer-events: none;
+}
+
+@keyframes scan {
+    0%   {top: 0%;}
+    100% {top: 100%;}
+}
+
+/* ===== Main containers ===== */
+.main-wrap {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 30px;
+}
+
+.hero-box {
+    display: grid;
+    grid-template-columns: 1.2fr 0.9fr;
+    gap: 32px;
+    width: 100%;
+    max-width: 1200px;
+    align-items: center;
+}
+
+/* ===== Left panel ===== */
+.left-panel {
+    padding: 30px 20px 30px 10px;
+}
+
+.logo-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    border: 1px solid rgba(0,255,255,0.25);
+    background: rgba(255,255,255,0.04);
+    backdrop-filter: blur(8px);
+    color: #9cfaff;
+    font-size: 14px;
+    letter-spacing: 1px;
+    box-shadow: 0 0 20px rgba(0,255,255,0.12);
+    animation: pulseBadge 2.3s ease-in-out infinite;
+}
+
+@keyframes pulseBadge {
+    0%, 100% {box-shadow: 0 0 20px rgba(0,255,255,0.08);}
+    50%      {box-shadow: 0 0 30px rgba(0,255,255,0.25);}
+}
+
+.main-title {
+    font-size: 64px;
+    font-weight: 900;
+    line-height: 1.0;
+    margin-top: 26px;
+    margin-bottom: 18px;
+    color: #ffffff;
+    text-shadow: 0 0 10px rgba(0,255,255,0.22);
+}
+
+.main-title span {
+    color: #00e5ff;
+    text-shadow: 0 0 12px rgba(0,229,255,0.65), 0 0 28px rgba(0,229,255,0.35);
+}
+
+.sub-title {
+    font-size: 18px;
+    color: #b7c9df;
+    max-width: 680px;
+    line-height: 1.7;
+}
+
+.feature-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 28px;
+}
+
+.feature-chip {
+    padding: 12px 18px;
+    border-radius: 14px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(0,255,255,0.18);
+    color: #d7f8ff;
+    backdrop-filter: blur(10px);
+    transition: all 0.25s ease;
+    box-shadow: 0 0 18px rgba(0,255,255,0.05);
+}
+
+.feature-chip:hover {
+    transform: translateY(-4px) scale(1.02);
+    border-color: rgba(0,255,255,0.45);
+    box-shadow: 0 0 24px rgba(0,255,255,0.22);
+}
+
+/* ===== Login Card ===== */
+.login-card {
+    position: relative;
+    border-radius: 28px;
+    padding: 28px 26px 22px 26px;
+    background: rgba(8, 18, 38, 0.58);
+    border: 1px solid rgba(0,255,255,0.18);
+    backdrop-filter: blur(16px);
+    box-shadow:
+        0 0 0 1px rgba(255,255,255,0.03) inset,
+        0 0 28px rgba(0,255,255,0.10),
+        0 0 80px rgba(138,43,226,0.10);
+    overflow: hidden;
+    animation: floatCard 5s ease-in-out infinite;
+}
+
+.login-card::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: 28px;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(0,229,255,0.8), rgba(138,43,226,0.6), rgba(0,229,255,0.6));
+    -webkit-mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    pointer-events: none;
+    opacity: 0.65;
+}
+
+@keyframes floatCard {
+    0%, 100% {transform: translateY(0px);}
+    50%      {transform: translateY(-6px);}
+}
+
+.card-title {
+    font-size: 30px;
+    font-weight: 800;
+    color: #ffffff;
+    margin-bottom: 6px;
+    text-align: center;
+}
+
+.card-sub {
+    font-size: 14px;
+    color: #a9bdd8;
+    text-align: center;
+    margin-bottom: 14px;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #00ff99;
+    box-shadow: 0 0 14px #00ff99;
+    margin-right: 8px;
+}
+
+/* ===== Streamlit form ===== */
+div[data-testid="stTextInput"] > div > div input {
+    background: rgba(255,255,255,0.05) !important;
+    color: #ffffff !important;
+    border-radius: 16px !important;
+    border: 1px solid rgba(0,255,255,0.18) !important;
+    padding: 14px 16px !important;
+    box-shadow: 0 0 0 rgba(0,0,0,0);
+    transition: all 0.25s ease !important;
+}
+
+div[data-testid="stTextInput"] > div > div input:focus {
+    border: 1px solid rgba(0,255,255,0.75) !important;
+    box-shadow: 0 0 0 2px rgba(0,229,255,0.10), 0 0 18px rgba(0,229,255,0.30) !important;
+}
+
+/* label */
+div[data-testid="stTextInput"] label p {
+    color: #d7f8ff !important;
+    font-weight: 600 !important;
+}
+
+/* button */
+div.stButton > button {
+    width: 100%;
+    border: none;
+    border-radius: 16px;
+    padding: 0.9rem 1rem;
+    font-size: 16px;
+    font-weight: 800;
+    color: #04111f;
+    background: linear-gradient(90deg, #00e5ff, #5df5ff, #7b61ff);
+    box-shadow: 0 0 20px rgba(0,229,255,0.35), 0 0 40px rgba(123,97,255,0.22);
+    transition: all 0.25s ease;
+    letter-spacing: 0.3px;
+}
+
+div.stButton > button:hover {
+    transform: translateY(-3px) scale(1.015);
+    box-shadow: 0 0 28px rgba(0,229,255,0.55), 0 0 58px rgba(123,97,255,0.30);
+}
+
+div.stButton > button:active {
+    transform: scale(0.985);
+    box-shadow: 0 0 16px rgba(0,229,255,0.45);
+}
+
+/* small links / helper text */
+.helper-text {
+    text-align: center;
+    color: #8fa7c4;
+    font-size: 13px;
+    margin-top: 10px;
+}
+
+.helper-text span {
+    color: #00e5ff;
+    cursor: pointer;
+}
+
+.cyber-line {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(0,255,255,0.65), transparent);
+    margin: 14px 0 18px 0;
+    box-shadow: 0 0 10px rgba(0,255,255,0.35);
+}
+
+/* dashboard box */
+.dashboard-box {
+    border-radius: 24px;
+    padding: 22px;
+    background: rgba(8, 18, 38, 0.58);
+    border: 1px solid rgba(0,255,255,0.18);
+    backdrop-filter: blur(16px);
+    box-shadow: 0 0 28px rgba(0,255,255,0.10);
+    margin-top: 12px;
+}
+
+/* responsive */
+@media (max-width: 980px) {
+    .hero-box {
+        grid-template-columns: 1fr;
+    }
+    .main-title {
+        font-size: 44px;
+    }
+    .left-panel {
+        padding: 0;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
 
-
-MAX_TOTAL = 1_000_000_000
-MAX_FILES = 120
-SAFE_ZIP_SIZE = 150_000_000
-
-
-def get_secret(name, default=""):
-    try:
-        return str(
-            st.secrets.get(name, default)
-        ).strip()
-    except (
-        FileNotFoundError,
-        KeyError,
-        AttributeError
-    ):
-        return default
-
-
-def file_record(upload, folder):
-    suffix = Path(
-        upload.name
-    ).suffix.lower()
-
-    if suffix not in {
-        ".mp4",
-        ".mov",
-        ".webm"
-    }:
-        raise ValueError(
-            "รองรับเฉพาะ MP4, MOV, WEBM"
-        )
-
-    destination = (
-        folder
-        / f"{uuid.uuid4().hex}{suffix}"
-    )
-
-    digest = checksum_and_save(
-        upload,
-        destination
-    )
-
-    return {
-        "id": uuid.uuid4().hex,
-        "name": upload.name,
-        "size": upload.size,
-        "path": str(destination),
-        "hash": digest
-    }
-
-
-def run_batch(
-    uploads,
-    mode,
-    key,
-    model,
-    workers
-):
-    batch_id = uuid.uuid4().hex
-
-    folder = ROOT / batch_id
-    folder.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    st.session_state.batch_id = batch_id
-    st.session_state.results = []
-    st.session_state.busy = True
-
-    progress = st.progress(
-        0.0,
-        text="กำลังบันทึกไฟล์..."
-    )
-
-    notice = st.empty()
-    records = []
-
-    try:
-        for idx, upload in enumerate(uploads):
-            try:
-                records.append(
-                    file_record(
-                        upload,
-                        folder
-                    )
-                )
-
-            except Exception as exc:
-                records.append({
-                    "id": uuid.uuid4().hex,
-                    "name": upload.name,
-                    "size": upload.size,
-                    "path": "",
-                    "hash": "",
-                    "result": {
-                        "decision": "ERROR",
-                        "reason": str(exc),
-                        "elapsed": 0,
-                        "video_type": "Unknown",
-                        "issues": [],
-                        "qualified": False
-                    }
-                })
-
-            progress.progress(
-                (idx + 1) / (2 * len(uploads)),
-                text=(
-                    f"บันทึกไฟล์ "
-                    f"{idx + 1}/{len(uploads)}"
-                )
-            )
-
-        # Skip duplicate video contents in one batch.
-        uniques = {}
-
-        for row in records:
-            if row.get("hash"):
-                uniques.setdefault(
-                    row["hash"],
-                    row
-                )
-
-        futures = {}
-
-        with ThreadPoolExecutor(
-            max_workers=workers
-        ) as pool:
-
-            for sha, row in uniques.items():
-                future = pool.submit(
-                    analyze_file,
-                    row["path"],
-                    sha,
-                    mode,
-                    key,
-                    model
-                )
-
-                futures[future] = sha
-
-            outcomes = {}
-            completed_unique = 0
-
-            for future in as_completed(futures):
-                sha = futures[future]
-
-                try:
-                    outcomes[sha] = future.result()
-
-                except Exception as exc:
-                    outcomes[sha] = {
-                        "decision": "ERROR",
-                        "reason": f"Worker: {exc}",
-                        "elapsed": 0,
-                        "video_type": "Unknown",
-                        "issues": [],
-                        "qualified": False
-                    }
-
-                completed_unique += 1
-
-                current = [
-                    dict(
-                        row,
-                        result=outcomes[row["hash"]]
-                    )
-                    for row in records
-                    if row.get("hash") in outcomes
-                ]
-
-                current.extend([
-                    row
-                    for row in records
-                    if "result" in row
-                ])
-
-                st.session_state.results = current
-                done = len(current)
-
-                progress.progress(
-                    .5 + .5 * (
-                        done / len(records)
-                    ),
-                    text=(
-                        f"ตรวจเสร็จ "
-                        f"{done}/{len(records)} คลิป"
-                    )
-                )
-
-                notice.info(
-                    f"กำลังตรวจ: "
-                    f"{completed_unique}/"
-                    f"{len(uniques)} ไฟล์ไม่ซ้ำ"
-                )
-
-        st.session_state.results = [
-            dict(
-                row,
-                result=outcomes[row["hash"]]
-            )
-            if row.get("hash")
-            else row
-            for row in records
-        ]
-
-        progress.progress(
-            1.0,
-            text="เสร็จสิ้น"
-        )
-
-        notice.success(
-            "การตรวจชุดนี้เสร็จแล้ว"
-        )
-
-    finally:
-        st.session_state.busy = False
-
-
-def report_csv(rows):
-    output = io.StringIO()
-
-    cols = [
-        "filename",
-        "size_bytes",
-        "decision",
-        "inspection_level",
-        "qualified",
-        "video_type",
-        "duration",
-        "reason",
-        "elapsed",
-        "cached",
-        "issues"
-    ]
-
-    writer = csv.DictWriter(
-        output,
-        fieldnames=cols
-    )
-
-    writer.writeheader()
-
-    for row in rows:
-        r = row["result"]
-
-        writer.writerow({
-            "filename": row["name"],
-            "size_bytes": row["size"],
-            "decision": r.get("decision"),
-            "inspection_level": r.get(
-                "inspection_level",
-                "BASIC"
-            ),
-            "qualified": r.get(
-                "qualified",
-                False
-            ),
-            "video_type": r.get(
-                "video_type",
-                ""
-            ),
-            "duration": r.get("duration"),
-            "reason": r.get(
-                "reason",
-                ""
-            ),
-            "elapsed": r.get("elapsed"),
-            "cached": r.get(
-                "cached",
-                False
-            ),
-            "issues": json.dumps(
-                r.get("issues", []),
-                ensure_ascii=False
-            )
-        })
-
-    return output.getvalue().encode(
-        "utf-8-sig"
-    )
-
-
-def make_zip(rows):
-    stream = io.BytesIO()
-
-    with zipfile.ZipFile(
-        stream,
-        "w",
-        compression=zipfile.ZIP_STORED
-    ) as z:
-
-        for i, row in enumerate(rows):
-            p = Path(row["path"])
-
-            if p.exists():
-                z.write(
-                    p,
-                    arcname=(
-                        f"{i + 1:03d}_"
-                        f"{Path(row['name']).name}"
-                    )
-                )
-
-    return stream.getvalue()
-
-
-st.title(
-    "🎬 AI Video Quality Inspector"
-)
-
-st.caption(
-    "GitHub + Streamlit Cloud Edition "
-    "• ตรวจเป็นชุด • PASS / FAIL "
-    "• จัดการผลในหน้าเว็บ"
-)
-
-st.warning(
-    "**โปรดอ่าน:** หากไม่มี Gemini API Key "
-    "โปรแกรมจะตรวจได้เฉพาะข้อบกพร่องทางเทคนิค "
-    "เช่น ภาพมืดหรือเสียงแตก "
-    "ผล PASS ในโหมดนี้เป็นเพียง PASS เบื้องต้น "
-    "ไม่ได้ยืนยันว่ามือ นิ้ว หรือสินค้าถูกต้อง"
-)
-
-
-api_key = get_secret(
-    "GEMINI_API_KEY"
-)
-
-model = get_secret(
-    "GEMINI_MODEL",
-    "gemini-3.5-flash-lite"
-)
-
-
-with st.sidebar:
-    st.header(
-        "⚙️ ตั้งค่าการตรวจ"
-    )
-
-    mode = st.selectbox(
-        "ความละเอียด",
-        [
-            "Balanced",
-            "Fast",
-            "Deep"
-        ],
-        index=0,
-        help=(
-            "Fast 10 เฟรม, "
-            "Balanced 20 เฟรม, "
-            "Deep 30 เฟรมต่อคลิป"
-        )
-    )
-
-    ai_on = st.checkbox(
-        "ใช้ Gemini Vision AI",
-        value=bool(api_key),
-        disabled=not api_key
-    )
-
-    workers = st.slider(
-        "จำนวนคลิปที่ตรวจพร้อมกัน",
-        1,
-        3,
-        2
-    )
-
-    if ai_on:
-        st.success(
-            f"เชื่อมต่อโหมด AI: {model}"
-        )
-
-        st.caption(
-            "ใช้เฉพาะโมเดลที่บัญชีของคุณมีสิทธิ์ "
-            "และอาจมีโควตาหรือค่าใช้จ่าย "
-            "ตามบัญชี API"
-        )
-
-    else:
-        st.info(
-            "โหมด BASIC: "
-            "ใช้ OpenCV/FFmpeg ใน Streamlit "
-            "ไม่ต้องมี API Key"
-        )
-
-    st.caption(
-        "คลิปต่าง ๆ เก็บชั่วคราว "
-        "บนเซิร์ฟเวอร์ Streamlit; "
-        "อาจหายเมื่อแอปรีสตาร์ต"
-    )
-
-    space = shutil.disk_usage(
-        tempfile.gettempdir()
-    )
-
-    st.metric(
-        "พื้นที่ดิสก์ว่าง",
-        f"{space.free / 1e9:.1f} GB"
-    )
-
-
-if "results" not in st.session_state:
-    st.session_state.results = []
-
-if "busy" not in st.session_state:
-    st.session_state.busy = False
-
-
-st.subheader(
-    "1. อัปโหลดวิดีโอ"
-)
-
-files = st.file_uploader(
-    "เลือกคลิป MP4, MOV หรือ WEBM "
-    "(เลือกหลายไฟล์ได้)",
-    type=[
-        "mp4",
-        "mov",
-        "webm"
-    ],
-    accept_multiple_files=True
-)
-
-
-if files:
-    total = sum(
-        x.size
-        for x in files
-    )
-
-    a, b, c = st.columns(3)
-
-    a.metric(
-        "ไฟล์ที่เลือก",
-        len(files)
-    )
-
-    b.metric(
-        "ขนาดรวม",
-        f"{total / 1e6:.1f} MB"
-    )
-
-    c.metric(
-        "เพดานต่อชุด",
-        "1,000 MB"
-    )
-
-    if total > MAX_TOTAL:
-        st.error(
-            "ไฟล์ชุดนี้เกิน 1 GB "
-            "โปรดแบ่งเป็นหลายชุด"
-        )
-
-    elif len(files) > MAX_FILES:
-        st.error(
-            "เกิน 120 คลิปต่อชุด "
-            "โปรดแบ่งเป็นหลายชุด"
-        )
-
-    else:
-        if total > 250_000_000:
-            st.warning(
-                "ชุดนี้ค่อนข้างใหญ่สำหรับ "
-                "Streamlit Cloud ฟรี "
-                "อาจถูกจำกัด RAM "
-                "แม้โปรแกรมตั้งรับสูงสุด 1 GB"
-            )
-
-        if st.button(
-            "▶ เริ่มตรวจทั้งหมด",
-            type="primary",
-            disabled=st.session_state.busy
-        ):
-            run_batch(
-                files,
-                mode,
-                api_key if ai_on else "",
-                model,
-                workers
-            )
-
+# -------------------------------
+# Background HTML
+# -------------------------------
+st.markdown("""
+<div class="cyber-bg"></div>
+<div class="grid-overlay"></div>
+<div class="scanline"></div>
+""", unsafe_allow_html=True)
+
+# -------------------------------
+# Login function
+# -------------------------------
+def check_login(user, password):
+    # เปลี่ยนตรงนี้เป็น user/pass ที่คุณต้องการ
+    valid_user = "admin"
+    valid_pass = "1234"
+    return user == valid_user and password == valid_pass
+
+# -------------------------------
+# LOGGED IN
+# -------------------------------
+if st.session_state.logged_in:
+    st.markdown("""
+    <div class="main-wrap">
+        <div style="width:100%; max-width:1200px;">
+            <div class="logo-badge">⚡ SYSTEM ONLINE</div>
+            <div class="main-title" style="margin-top:20px;">Welcome back, <span>""" + st.session_state.username + """</span></div>
+            <div class="sub-title">คุณเข้าสู่ระบบสำเร็จแล้ว หน้านี้คือ Dashboard ตัวอย่างสำหรับต่อยอดไปยังระบบตรวจคลิป AI ของคุณ</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("""
+        <div class="dashboard-box">
+            <h3>📂 Upload Clips</h3>
+            <p style="color:#b7c9df;">อัปโหลดไฟล์วิดีโอเพื่อเริ่มตรวจสอบ</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("""
+        <div class="dashboard-box">
+            <h3>🤖 AI Analysis</h3>
+            <p style="color:#b7c9df;">วิเคราะห์ภาพ เสียง และความสมจริงของคลิป</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col3:
+        st.markdown("""
+        <div class="dashboard-box">
+            <h3>✅ PASS / FAIL</h3>
+            <p style="color:#b7c9df;">สรุปผลการตรวจสอบแต่ละคลิปอย่างชัดเจน</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.rerun()
+
+# -------------------------------
+# LOGIN PAGE
+# -------------------------------
 else:
-    st.info(
-        "เลือกไฟล์ก่อน "
-        "แล้วกดปุ่มเริ่มตรวจทั้งหมด"
-    )
+    st.markdown("""
+    <div class="main-wrap">
+        <div class="hero-box">
+            <div class="left-panel">
+                <div class="logo-badge">⚡ CYBER SECURITY ACCESS</div>
+                <div class="main-title">CLIP<span>GUARD</span> AI</div>
+                <div class="sub-title">
+                    ระบบตรวจสอบวิดีโออัจฉริยะในสไตล์ Cyber Tech ล้ำอนาคต
+                    พร้อมเอฟเฟกต์แสงเคลื่อนไหว พื้นหลังเรืองแสง และ UI แบบ glassmorphism
+                    เหมาะสำหรับต่อยอดเป็นระบบตรวจคลิป PASS / FAIL ของคุณ
+                </div>
 
+                <div class="feature-row">
+                    <div class="feature-chip">🎞 วิเคราะห์คลิป</div>
+                    <div class="feature-chip">🎤 ตรวจเสียงพูด</div>
+                    <div class="feature-chip">📦 ตรวจสินค้า</div>
+                    <div class="feature-chip">⚡ UI แนวอนาคต</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-rows = st.session_state.results
+    # วาง card ตรงกลาง
+    left, center, right = st.columns([1.2, 0.9, 1.2])
 
-st.divider()
+    with center:
+        st.markdown("""
+        <div class="login-card">
+            <div class="card-title">Sign In</div>
+            <div class="card-sub"><span class="status-dot"></span>Secure access portal</div>
+            <div class="cyber-line"></div>
+        """, unsafe_allow_html=True)
 
-st.subheader(
-    "2. ผลการตรวจ"
-)
+        username = st.text_input("Username", placeholder="Enter your username")
+        password = st.text_input("Password", type="password", placeholder="Enter your password")
 
+        if st.button("LOGIN"):
+            if check_login(username, password):
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.success("Login successful!")
+                st.rerun()
+            else:
+                st.error("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
 
-if not rows:
-    st.caption(
-        "ยังไม่มีผลการตรวจในเซสชันนี้"
-    )
-
-else:
-    passed = sum(
-        r["result"].get("decision") == "PASS"
-        for r in rows
-    )
-
-    failed = sum(
-        r["result"].get("decision") == "FAIL"
-        for r in rows
-    )
-
-    errors = sum(
-        r["result"].get("decision") == "ERROR"
-        for r in rows
-    )
-
-    unverified = sum(
-        r["result"].get("decision") == "PASS"
-        and not r["result"].get(
-            "qualified",
-            False
-        )
-        for r in rows
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric(
-        "ตรวจแล้ว",
-        len(rows)
-    )
-
-    c2.metric(
-        "PASS",
-        passed
-    )
-
-    c3.metric(
-        "FAIL",
-        failed
-    )
-
-    c4.metric(
-        "ERROR",
-        errors
-    )
-
-    if unverified:
-        st.warning(
-            f"มี PASS เบื้องต้น {unverified} คลิป "
-            "ที่ยัง **ไม่ได้ตรวจข้อผิดเพี้ยน "
-            "ของมือและสินค้าด้วย Vision AI**"
-        )
-
-    filt = st.selectbox(
-        "กรองผล",
-        [
-            "ทั้งหมด",
-            "PASS",
-            "FAIL",
-            "ERROR"
-        ]
-    )
-
-    word = st.text_input(
-        "ค้นหาชื่อคลิป"
-    )
-
-    filtered = [
-        r
-        for r in rows
-        if (
-            filt == "ทั้งหมด"
-            or r["result"].get("decision") == filt
-        )
-        and word.lower() in r["name"].lower()
-    ]
-
-    st.dataframe(
-        [
-            {
-                "ไฟล์": r["name"],
-                "ผล": r["result"].get(
-                    "decision",
-                    "ERROR"
-                ),
-                "ระดับ": r["result"].get(
-                    "inspection_level",
-                    "BASIC"
-                ),
-                "ประเภท": r["result"].get(
-                    "video_type",
-                    "Unknown"
-                ),
-                "เหตุผล": r["result"].get(
-                    "reason",
-                    ""
-                ),
-                "เวลา (วิ.)": r["result"].get(
-                    "elapsed",
-                    0
-                )
-            }
-            for r in filtered
-        ],
-        hide_index=True,
-        use_container_width=True
-    )
-
-    st.download_button(
-        "⬇ ดาวน์โหลดรายงาน CSV",
-        report_csv(rows),
-        "video_inspection_results.csv",
-        mime="text/csv"
-    )
-
-    st.download_button(
-        "⬇ ดาวน์โหลดรายงาน JSON",
-        json.dumps(
-            [
-                {
-                    "name": r["name"],
-                    **r["result"]
-                }
-                for r in rows
-            ],
-            ensure_ascii=False,
-            indent=2
-        ),
-        "video_inspection_results.json",
-        mime="application/json"
-    )
-
-    st.subheader(
-        "3. ดาวน์โหลดวิดีโอ"
-    )
-
-    options = {
-        (
-            f"{r['name']} | "
-            f"{r['result'].get('decision')} | "
-            f"{r['id'][:6]}"
-        ): r
-
-        for r in filtered
-
-        if r.get("path")
-        and Path(r["path"]).exists()
-    }
-
-    selected = st.multiselect(
-        "เลือกคลิปที่จะดาวน์โหลด",
-        list(options)
-    )
-
-    choice = [
-        options[x]
-        for x in selected
-    ]
-
-    size = sum(
-        r["size"]
-        for r in choice
-    )
-
-    st.caption(
-        f"เลือก {len(choice)} ไฟล์ "
-        f"รวม {size / 1e6:.1f} MB — "
-        "จำกัด ZIP ที่ 150 MB "
-        "เพื่อป้องกัน RAM เต็ม"
-    )
-
-    if choice and size <= SAFE_ZIP_SIZE:
-        st.download_button(
-            "⬇ ดาวน์โหลดคลิปที่เลือก (ZIP)",
-            make_zip(choice),
-            "selected_clips.zip",
-            mime="application/zip"
-        )
-
-    elif size > SAFE_ZIP_SIZE:
-        st.warning(
-            "เลือกชุดย่อยรวมไม่เกิน 150 MB "
-            "แล้วดาวน์โหลดหลายครั้ง"
-        )
-
-    st.subheader(
-        "4. ดูรายละเอียดคลิป"
-    )
-
-    page = st.number_input(
-        "หน้าผลลัพธ์ (หน้าละ 8 คลิป)",
-        min_value=1,
-        max_value=max(
-            1,
-            (len(filtered) + 7) // 8
-        ),
-        value=1
-    )
-
-    for r in filtered[
-        (page - 1) * 8:page * 8
-    ]:
-        decision = r["result"].get(
-            "decision",
-            "ERROR"
-        )
-
-        icon = {
-            "PASS": "✅",
-            "FAIL": "❌",
-            "ERROR": "⚠️"
-        }.get(
-            decision,
-            "❓"
-        )
-
-        with st.expander(
-            f"{icon} {r['name']} — {decision}"
-        ):
-            details = r["result"]
-
-            st.write(
-                details.get(
-                    "reason",
-                    ""
-                )
-            )
-
-            st.write(
-                "**ประเภท:**",
-                details.get(
-                    "video_type",
-                    "Unknown"
-                ),
-                " | **ระยะเวลา:**",
-                details.get(
-                    "duration"
-                ),
-                " | **ความละเอียด:**",
-                details.get(
-                    "resolution"
-                )
-            )
-
-            if details.get("notes"):
-                st.write(
-                    "**หมายเหตุ:**",
-                    "; ".join(
-                        details["notes"]
-                    )
-                )
-
-            if details.get("issues"):
-                st.json(
-                    details["issues"]
-                )
-
-            thumb = (
-                Path(
-                    r["path"] + ".jpg"
-                )
-                if r.get("path")
-                else None
-            )
-
-            if thumb and thumb.exists():
-                st.image(
-                    str(thumb),
-                    width=260
-                )
-
-            if (
-                r.get("path")
-                and Path(
-                    r["path"]
-                ).exists()
-            ):
-                if st.checkbox(
-                    "เล่นวิดีโอ",
-                    key="play_" + r["id"]
-                ):
-                    st.video(
-                        r["path"]
-                    )
-
-
-st.caption(
-    "หมายเหตุ: Streamlit Community Cloud "
-    "เป็นโฮสต์ทรัพยากรจำกัด "
-    "เหมาะสำหรับเริ่มทดสอบ "
-    "ไม่ใช่ระบบประมวลผลวิดีโอปริมาณมหาศาล "
-    "ที่มี SLA"
-)
+        st.markdown("""
+            <div class="helper-text">
+                Forgot password? <span>Reset Access</span><br>
+                Demo account: <span>admin</span> | Password: <span>1234</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
